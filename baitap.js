@@ -782,79 +782,401 @@ let a = [
 ]
 
 
-// Biến lưu dữ liệu gốc và dữ liệu hiện tại
-let originalData = JSON.parse(JSON.stringify(a));
-let filteredData = [...a];
+const DB_KEY = "POSTS_COMMENTS_DB_V1";
 
-// Hàm hiển thị dữ liệu lên bảng
+// Seed data (tương tự cách bạn đang có mảng a[]) - tham khảo cấu trúc renderTable/sort/search trong code cũ :contentReference[oaicite:2]{index=2}
+const seedDB = {
+  posts: [
+    { id: "1", title: "Post 1", slug: "post-1", content: "Nội dung post 1", isDeleted: false },
+    { id: "2", title: "Post 2", slug: "post-2", content: "Nội dung post 2", isDeleted: false },
+    { id: "3", title: "Post 3", slug: "post-3", content: "Nội dung post 3", isDeleted: true } // demo xoá mềm
+  ],
+  comments: [
+    { id: "1", postId: "1", content: "Comment 1 của Post 1", isDeleted: false },
+    { id: "2", postId: "1", content: "Comment 2 của Post 1", isDeleted: false },
+    { id: "3", postId: "3", content: "Comment của Post 3 (post đã xoá mềm)", isDeleted: true }
+  ]
+};
+
+function loadDB() {
+  const raw = localStorage.getItem(DB_KEY);
+  if (!raw) {
+    localStorage.setItem(DB_KEY, JSON.stringify(seedDB));
+    return structuredClone(seedDB);
+  }
+  try {
+    const db = JSON.parse(raw);
+    // đảm bảo key tồn tại
+    db.posts = db.posts || [];
+    db.comments = db.comments || [];
+    return db;
+  } catch {
+    localStorage.setItem(DB_KEY, JSON.stringify(seedDB));
+    return structuredClone(seedDB);
+  }
+}
+
+function saveDB(db) {
+  localStorage.setItem(DB_KEY, JSON.stringify(db));
+}
+
+function resetDB() {
+  localStorage.setItem(DB_KEY, JSON.stringify(seedDB));
+  originalData = loadDB().posts;
+  filteredData = structuredClone(originalData);
+  renderTable(filteredData);
+  clearPostForm();
+  clearCommentPanel();
+  alert("Đã reset CSDL (localStorage)!");
+}
+
+// ===============================
+// Dữ liệu gốc + dữ liệu hiện tại (giống code cũ)
+// ===============================
+let originalData = loadDB().posts;
+let filteredData = structuredClone(originalData);
+
+// ===============================
+// Helpers: ID tự tăng (ID là chuỗi)
+// ===============================
+function getMaxIdString(list) {
+  // list: [{id:"1"},...]
+  let max = 0;
+  for (const item of list) {
+    const n = parseInt(item.id, 10);
+    if (!Number.isNaN(n)) max = Math.max(max, n);
+  }
+  return max;
+}
+
+function nextIdString(list) {
+  return String(getMaxIdString(list) + 1);
+}
+
+// ===============================
+// Render Posts table (HIỂN THỊ CẢ POST XOÁ MỀM, gạch ngang)
+// ===============================
 function renderTable(data) {
-    let tableBody = document.getElementById("tableBody");
-    tableBody.innerHTML = "";
+  const tableBody = document.getElementById("tableBody");
+  tableBody.innerHTML = "";
 
-    if (data.length === 0) {
-        tableBody.innerHTML = '<tr><td colspan="6" class="text-center text-danger">Không tìm thấy sản phẩm nào!</td></tr>';
-        document.getElementById("totalCount").innerText = 0;
-        return;
-    }
+  if (!data || data.length === 0) {
+    tableBody.innerHTML = `<tr><td colspan="6" class="text-center text-danger">Không có post nào!</td></tr>`;
+    document.getElementById("totalCount").innerText = 0;
+    return;
+  }
 
-    data.forEach(product => {
-        let row = `<tr>
-            <td>${product.id}</td>
-            <td><strong>${product.title}</strong></td>
-            <td><span class="badge bg-secondary">${product.category.name}</span></td>
-            <td><strong class="text-success">$${product.price.toLocaleString()}</strong></td>
-            <td>${product.description.substring(0, 50)}...</td>
-            <td><img src="${product.images[0]}" alt="${product.title}"></td>
-        </tr>`;
-        tableBody.innerHTML += row;
-    });
+  data.forEach(post => {
+    const deletedClass = post.isDeleted ? "deleted-row" : "";
+    const statusBadge = post.isDeleted
+      ? `<span class="badge bg-danger">Deleted</span>`
+      : `<span class="badge bg-success">Active</span>`;
 
-    document.getElementById("totalCount").innerText = data.length;
+    const row = document.createElement("tr");
+    row.className = deletedClass;
+
+    row.innerHTML = `
+      <td><strong>${post.id}</strong></td>
+      <td class="pointer" onclick="selectPost('${post.id}')">${escapeHtml(post.title)}</td>
+      <td>${escapeHtml(post.slug || "")}</td>
+      <td>${escapeHtml(shorten(post.content, 80))}</td>
+      <td>${statusBadge}</td>
+      <td class="d-flex gap-2 flex-wrap">
+        <button class="btn btn-sm btn-outline-primary" onclick="editPost('${post.id}')">✏️ Sửa</button>
+        <button class="btn btn-sm btn-outline-danger" onclick="softDeletePost('${post.id}')">🧹 Xoá mềm</button>
+        <button class="btn btn-sm btn-outline-secondary" onclick="restorePost('${post.id}')">♻️ Khôi phục</button>
+      </td>
+    `;
+
+    tableBody.appendChild(row);
+  });
+
+  document.getElementById("totalCount").innerText = data.length;
 }
 
-// Hàm tìm kiếm
-function searchProducts() {
-    let searchValue = document.getElementById("searchInput").value.toLowerCase();
-    
-    filteredData = originalData.filter(product => 
-        product.title.toLowerCase().includes(searchValue)
-    );
-    
-    renderTable(filteredData);
+// ===============================
+// Search / Sort / Reset (giữ logic như code cũ)
+// ===============================
+function searchPosts() {
+  const searchValue = document.getElementById("searchInput").value.trim().toLowerCase();
+  filteredData = originalData.filter(p => (p.title || "").toLowerCase().includes(searchValue));
+  renderTable(filteredData);
 }
 
-// Sắp xếp theo tên A → Z
-function sortByNameAsc() {
-    filteredData.sort((a, b) => a.title.localeCompare(b.title));
-    renderTable(filteredData);
+function sortByTitleAsc() {
+  filteredData.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
+  renderTable(filteredData);
 }
 
-// Sắp xếp theo tên Z → A
-function sortByNameDesc() {
-    filteredData.sort((a, b) => b.title.localeCompare(a.title));
-    renderTable(filteredData);
+function sortByTitleDesc() {
+  filteredData.sort((a, b) => (b.title || "").localeCompare(a.title || ""));
+  renderTable(filteredData);
 }
 
-// Sắp xếp theo giá tăng dần
-function sortByPriceAsc() {
-    filteredData.sort((a, b) => a.price - b.price);
-    renderTable(filteredData);
+function sortByIdAsc() {
+  filteredData.sort((a, b) => parseInt(a.id, 10) - parseInt(b.id, 10));
+  renderTable(filteredData);
 }
 
-// Sắp xếp theo giá giảm dần
-function sortByPriceDesc() {
-    filteredData.sort((a, b) => b.price - a.price);
-    renderTable(filteredData);
+function sortByIdDesc() {
+  filteredData.sort((a, b) => parseInt(b.id, 10) - parseInt(a.id, 10));
+  renderTable(filteredData);
 }
 
-// Khôi phục dữ liệu ban đầu
 function resetTable() {
-    document.getElementById("searchInput").value = "";
-    filteredData = JSON.parse(JSON.stringify(originalData));
-    renderTable(filteredData);
+  document.getElementById("searchInput").value = "";
+  originalData = loadDB().posts;
+  filteredData = structuredClone(originalData);
+  renderTable(filteredData);
 }
 
-// Hiển thị dữ liệu ban đầu khi trang tải
-document.addEventListener("DOMContentLoaded", function() {
-    renderTable(filteredData);
+// ===============================
+// CRUD POSTS
+// - Create: bỏ trống ID => id = maxId+1 (string)
+// - Update: có ID => update
+// - Delete: Xoá mềm => isDeleted:true
+// ===============================
+function clearPostForm() {
+  document.getElementById("postId").value = "";
+  document.getElementById("postTitle").value = "";
+  document.getElementById("postSlug").value = "";
+  document.getElementById("postContent").value = "";
+}
+
+function savePost() {
+  const db = loadDB();
+
+  const id = document.getElementById("postId").value.trim(); // trống khi create
+  const title = document.getElementById("postTitle").value.trim();
+  const slug = document.getElementById("postSlug").value.trim();
+  const content = document.getElementById("postContent").value.trim();
+
+  if (!title) return alert("Title không được để trống!");
+
+  if (!id) {
+    // CREATE
+    const newId = nextIdString(db.posts);
+    db.posts.push({
+      id: newId,               // ID dạng chuỗi
+      title,
+      slug,
+      content,
+      isDeleted: false
+    });
+    saveDB(db);
+    alert(`Tạo post thành công! ID mới = ${newId}`);
+  } else {
+    // UPDATE
+    const idx = db.posts.findIndex(p => p.id === id);
+    if (idx === -1) return alert("Không tìm thấy post để sửa!");
+    db.posts[idx].title = title;
+    db.posts[idx].slug = slug;
+    db.posts[idx].content = content;
+    saveDB(db);
+    alert("Cập nhật post thành công!");
+  }
+
+  originalData = loadDB().posts;
+  filteredData = structuredClone(originalData);
+  renderTable(filteredData);
+  clearPostForm();
+}
+
+function editPost(id) {
+  const db = loadDB();
+  const post = db.posts.find(p => p.id === id);
+  if (!post) return alert("Không tìm thấy post!");
+
+  document.getElementById("postId").value = post.id;
+  document.getElementById("postTitle").value = post.title || "";
+  document.getElementById("postSlug").value = post.slug || "";
+  document.getElementById("postContent").value = post.content || "";
+}
+
+function softDeletePost(id) {
+  const db = loadDB();
+  const post = db.posts.find(p => p.id === id);
+  if (!post) return alert("Không tìm thấy post!");
+  post.isDeleted = true; // ✅ xoá mềm
+  saveDB(db);
+
+  originalData = loadDB().posts;
+  filteredData = structuredClone(originalData);
+  renderTable(filteredData);
+
+  // nếu đang chọn post này, vẫn cho xem comment
+  const selectedId = document.getElementById("selectedPostId").value;
+  if (selectedId === id) renderComments(id);
+}
+
+function restorePost(id) {
+  const db = loadDB();
+  const post = db.posts.find(p => p.id === id);
+  if (!post) return alert("Không tìm thấy post!");
+  post.isDeleted = false;
+  saveDB(db);
+
+  originalData = loadDB().posts;
+  filteredData = structuredClone(originalData);
+  renderTable(filteredData);
+
+  const selectedId = document.getElementById("selectedPostId").value;
+  if (selectedId === id) renderComments(id);
+}
+
+// ===============================
+// CRUD COMMENTS (đầy đủ Create/Read/Update/Delete)
+// Gợi ý: cũng dùng xoá mềm cho comments để đồng bộ UI
+// ===============================
+function clearCommentPanel() {
+  document.getElementById("selectedPostId").value = "";
+  document.getElementById("selectedPostLabel").innerText = "Chưa chọn";
+  document.getElementById("commentsList").innerHTML = `<div class="text-muted">Chọn 1 post để xem comments.</div>`;
+  clearCommentForm();
+}
+
+function selectPost(postId) {
+  const db = loadDB();
+  const post = db.posts.find(p => p.id === postId);
+  if (!post) return alert("Không tìm thấy post!");
+
+  document.getElementById("selectedPostId").value = postId;
+  document.getElementById("selectedPostLabel").innerText = `${post.title} (ID: ${postId})`;
+
+  renderComments(postId);
+  clearCommentForm();
+}
+
+function renderComments(postId) {
+  const db = loadDB();
+  const list = db.comments.filter(c => c.postId === postId); // hiển thị cả comment xoá mềm
+
+  if (list.length === 0) {
+    document.getElementById("commentsList").innerHTML = `<div class="text-muted">Chưa có comment nào.</div>`;
+    return;
+  }
+
+  const html = list.map(c => {
+    const cls = c.isDeleted ? "comment-deleted" : "";
+    const badge = c.isDeleted
+      ? `<span class="badge bg-danger ms-2">Deleted</span>`
+      : `<span class="badge bg-success ms-2">Active</span>`;
+
+    return `
+      <div class="border rounded p-2 mb-2 ${cls}">
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+          <div>
+            <strong>#${c.id}</strong> ${escapeHtml(c.content)} ${badge}
+          </div>
+          <div class="d-flex gap-2">
+            <button class="btn btn-sm btn-outline-primary" onclick="editComment('${c.id}')">✏️ Sửa</button>
+            <button class="btn btn-sm btn-outline-danger" onclick="softDeleteComment('${c.id}')">🧹 Xoá</button>
+            <button class="btn btn-sm btn-outline-secondary" onclick="restoreComment('${c.id}')">♻️ Khôi phục</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  document.getElementById("commentsList").innerHTML = html;
+}
+
+function clearCommentForm() {
+  document.getElementById("commentId").value = "";
+  document.getElementById("commentContent").value = "";
+}
+
+function saveComment() {
+  const db = loadDB();
+  const postId = document.getElementById("selectedPostId").value;
+  if (!postId) return alert("Bạn chưa chọn post để thêm comment!");
+
+  const id = document.getElementById("commentId").value.trim(); // trống khi create
+  const content = document.getElementById("commentContent").value.trim();
+  if (!content) return alert("Nội dung comment không được trống!");
+
+  if (!id) {
+    // CREATE
+    const newId = nextIdString(db.comments);
+    db.comments.push({
+      id: newId,        // ID comment dạng chuỗi
+      postId,
+      content,
+      isDeleted: false
+    });
+    saveDB(db);
+    alert(`Thêm comment thành công! ID comment = ${newId}`);
+  } else {
+    // UPDATE
+    const idx = db.comments.findIndex(c => c.id === id);
+    if (idx === -1) return alert("Không tìm thấy comment để sửa!");
+    db.comments[idx].content = content;
+    saveDB(db);
+    alert("Cập nhật comment thành công!");
+  }
+
+  clearCommentForm();
+  renderComments(postId);
+}
+
+function editComment(commentId) {
+  const db = loadDB();
+  const c = db.comments.find(x => x.id === commentId);
+  if (!c) return alert("Không tìm thấy comment!");
+  document.getElementById("commentId").value = c.id;
+  document.getElementById("commentContent").value = c.content || "";
+}
+
+function softDeleteComment(commentId) {
+  const db = loadDB();
+  const c = db.comments.find(x => x.id === commentId);
+  if (!c) return alert("Không tìm thấy comment!");
+  c.isDeleted = true;
+  saveDB(db);
+
+  const postId = document.getElementById("selectedPostId").value;
+  if (postId) renderComments(postId);
+}
+
+function restoreComment(commentId) {
+  const db = loadDB();
+  const c = db.comments.find(x => x.id === commentId);
+  if (!c) return alert("Không tìm thấy comment!");
+  c.isDeleted = false;
+  saveDB(db);
+
+  const postId = document.getElementById("selectedPostId").value;
+  if (postId) renderComments(postId);
+}
+
+// ===============================
+// Utils
+// ===============================
+function shorten(text, maxLen) {
+  text = text || "";
+  if (text.length <= maxLen) return text;
+  return text.slice(0, maxLen) + "...";
+}
+
+// chống XSS cơ bản khi render
+function escapeHtml(str) {
+  return String(str ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+// ===============================
+// Init
+// ===============================
+document.addEventListener("DOMContentLoaded", function () {
+  // init table
+  originalData = loadDB().posts;
+  filteredData = structuredClone(originalData);
+  renderTable(filteredData);
+
+  // init comments panel
+  clearCommentPanel();
 });
